@@ -1,0 +1,404 @@
+---
+title: "Root_ABn_Test"
+author: "Monil Shah"
+date: "April 12, 2019"
+output: html_document
+---
+
+##Introduction
+
+Root Insurance ran an A/B/N Test on its customers to test the psychology of the customers with reference to time and incentive. All 4 types of experiments ran by Root had a 30-day window regardless of their time entering in the test. The experiments or variants of the test were as below:
+
+- Exp. 0hr allowed referral activity after 0 hours with an incentive of $50
+
+- Exp. 48hr allowed referral activity after 48 hours with an incentive of $50
+
+- Exp. 168hr allowed referral activity after 168 hours with an incentive of $50
+
+- Exp. off allowed referral activity after 0 hours with an incentive of $25
+
+The goal of the test was to determine the best promotional activity offered to the customers that generated maximum referral activity while considering the cost associated with the same. To validate the findings of an A/B/N test, a key factor was the time frame the experiment was exposed and the amount of data collected.
+
+Considering all these factors, the approach was to conduct statistical analysis which would support business decision making process . The methods and statistical tools used during the process were Data processing, Data Modeling, Descriptive statistics, Pairwise Proportion test (Bonferroni), Sample Size and Power analysis for two proportion tests.
+
+Post analysis and testing, experiment **OFF** was better in comparison to other experiments considering cost as a decision-making factor. Overall the experiment's sample size was insufficient to statistically validate the findings.
+
+Further steps are embedded in the report.
+
+
+```{r include =FALSE}
+#install.packages("stringr")
+#install.packages("data.table")
+library(data.table)
+library(stringr)
+```
+
+##DATA Preprocessing
+
+In this step the data was imported from the designated source later cleaned, transformed and modeled as per the requirement for the analysis.
+
+###Data Import
+
+```{r include=FALSE}
+#Set working directory - Import both CSV files
+setwd("C:/Users/Monil Shah/Google Drive/Work/Root Insurance/TEST DATA")
+receiver<-  read.csv("promo_referrals (1).csv",header=T)
+sender <- read.csv("referral_promo_participants (1) (2).csv", header=T)
+```
+
+
+```{r include=FALSE}
+str(receiver)
+``` 
+
+
+```{r include = FALSE}
+sender_table<- data.table(sender)
+unique_Id_count<- sender_table[, .(unique_customer_count = length(unique(user_id))), by = sender$bucket]
+colnames(unique_Id_count)<- c("bucket", "unique_customer_count")
+
+```
+```{r}
+#Unique count of total number of customers bucketed
+```
+
+```{r echo=FALSE}
+unique_Id_count
+```
+These are the total number of unique customers who were bucketed in each experiment respectively. 
+
+```{r include=FALSE}
+#Macth the primary key name to perform a Join
+receiver$user_id<- receiver$sender_user_id
+#drop sender_user_id variable
+rec_dat<- data.frame(receiver[,2:10])
+```
+
+###Data Join
+The two CSV files contained sender's and receiver's information which had "user_id" as a primary key. Both datasets were outer join based on the primary key to achieve a single dataset for analysis. 
+
+JOIN both datasets with primary key == "user_id"
+
+```{r}
+dat<- merge(x = sender  , y = rec_dat, by = "user_id" , all = TRUE)
+```
+
+###Data Modeling/Cleaning
+```{r include=FALSE}
+#Convert Date and Time from Character to DATE and Time
+dat$bucket_timestamp<- as.POSIXct(dat$bucket_timestamp,format="%Y-%m-%d %H:%M:%OS")
+dat$receiver_account_timestamp<- as.POSIXct(dat$receiver_account_timestamp,format="%Y-%m-%d %H:%M:%OS")
+```
+
+
+```{r include=FALSE}
+#Time difference between account created and time bucketed
+dat$time_difference<- difftime(dat$receiver_account_timestamp,dat$bucket_timestamp, tz, units = c("days"))
+
+```
+
+The data was filtered to obtain a dataset from the period of 30-day experiment window for further analysis.
+
+- *Referal created before experiment*
+
+There were instances in each experiment where a reference was generated before bucketed time which was not in the scope of the experiment. Hence, those observations were eliminated. 
+For Example:
+
+In the bucket of "0hr" and "OFF"
+
+Bucketed time - 6th May 2018
+
+Reference account created - 1st April 2018
+
+
+This was a classic example of a promotional experiment received to an existing customer. Here, the customer referred an individual before the experiment begun. Hence, the referral was not qualified for the test.
+
+Similarly, 
+
+in the bucket of "48hr"
+
+Bucketed Time- 6th May 2018
+
+Reference account created- 7th May 2018
+
+
+Here, although the reference was created after the bucketed time the referral doesn't qualify for the promotion because the customer received the actual promotion after 48 hours of bucketed time which was 8th May 2018.
+
+- *Referal created after experiment*
+
+The primary goal was to find the best experiment from the 30-day promotion window. Taking it into consideration, account creation, quote acceptance and policy purchased factors were repopulated in the same dataset.
+
+For Example:
+
+In the bucket of "0hr"
+
+Bucketed Time - 6th May 2018 
+
+Reference account created - 9th June 2018
+
+
+Here the referral created an account 30 days after they received the reference from a Root customer which exceeded the 30-day window and counts as an account not created within that experiment. Therefore, we filtered these data points from our dataset.
+
+Similarly,
+
+In the bucket of "168hr"
+
+Bucketed Time - 6th May 2018
+
+reference account created - 9th June 2018
+
+
+Here the referral created an account within the 30 day window after they received the reference from a Root customer which qualifies as an account created. Therefore, these instances were included in the datset.
+
+```{r include=FALSE}
+#Cleaning the data
+#Convert into Date date and time
+str_extract(dat$time_difference, "\\-*\\d+\\.*\\d*")
+as.numeric(dat$time_difference)
+
+
+dat$time_difference[is.na(dat$time_difference)] <- -1000  #replace NAs to avoid TRUE/FALSE error
+
+#If time difference is > 0 in 0hr/off, then 1 in rec_account
+#else, 0
+for (i in 1:nrow(dat[1])){
+  if(dat[i,"bucket"]=='off' && dat[i,"time_difference"] >0){
+    dat[i,"receiver_account"]=1
+  }
+  else if(dat[i,"time_difference"] >0 && dat[i,"bucket"]=='0hr' )
+  {
+    dat[i,"receiver_account"]=1
+  }
+  else if(dat[i,"time_difference"] <=2 && dat[i,"bucket"]=='48hr' )
+  {
+    dat[i,"receiver_account"]=0
+  }
+  else if(dat[i,"time_difference"] >2 && dat[i,"bucket"]=='48hr' )
+  {
+    dat[i,"receiver_account"]=1
+  }
+  else if(dat[i,"time_difference"] <=7 && dat[i,"bucket"]=='168hr' )
+  {
+    dat[i,"receiver_account"]=0
+  }
+  else if(dat[i,"time_difference"] >7 && dat[i,"bucket"]=='168hr' )
+  {
+    dat[i,"receiver_account"]=1
+  }
+  
+}
+
+
+#Time_Difference is the time difference between the time 
+#Drop all values below 0 after the above IF/ELSE loop
+dat=dat[which(dat$time_difference>0),]
+
+
+#If Time Difference is greater than 30 for 0hr/off then receiver account is 0
+#Else, 1
+
+
+for (i in 1:nrow(dat[1])){
+  if (dat[i,"time_difference"] >30 && dat[i,"bucket"]=='off' ){
+    dat[i,"receiver_account"]=0
+  }
+  else if (dat[i,"time_difference"] <=30 && dat[i,"bucket"]=='off' ){
+    dat[i,"receiver_account"]=1
+  }
+  else if(dat[i,"time_difference"] >30 && dat[i,"bucket"]=='0hr' )
+  {
+    dat[i,"receiver_account"]=0
+  }
+  else if(dat[i,"time_difference"] <=30 && dat[i,"bucket"]=='0hr' )
+  {
+    dat[i,"receiver_account"]=1
+  }
+  else if(dat[i,"time_difference"] >32 && dat[i,"bucket"]=='48hr' )
+  {
+    dat[i,"receiver_account"]=0
+  }
+  else if(dat[i,"time_difference"] <=32 && dat[i,"bucket"]=='48hr' )
+  {
+    dat[i,"receiver_account"]=1
+  }
+  else if(dat[i,"time_difference"] >37 && dat[i,"bucket"]=='168hr' )
+  {
+    dat[i,"receiver_account"]=0
+  }
+  else if(dat[i,"time_difference"] <=37 && dat[i,"bucket"]=='168hr' )
+  {
+    dat[i,"receiver_account"]=1
+  }
+  
+}
+
+```
+
+##Analysis
+
+###Descriptive statistics
+
+
+The dataset has the unique number of people who generated one or more references. This metric was calculated to compare how many customers were offered the promotion and how many customers were attracted to the promotion to send referrals. 
+```{r include=FALSE}
+dat_tab<- data.table(dat)
+```
+```{r}
+Table_Unique<- dat_tab[, .(number_of_distinct_users = length(unique(user_id))), by = bucket]
+Table_Unique
+```
+
+
+```{r include=FALSE}
+#Repopulate data in Quote column based on logic:
+#If Account_rec == 0 then 0 in quote else leave quote the way it is
+for (i in 1:nrow(dat))
+  if(dat[i,'receiver_account']==0)
+    dat[i,'receiver_quote']=0
+```
+
+```{r include=FALSE}
+#Repopulate policy column b ased on quotes
+#If Quote not received, then policy == 0 else leave policy the way it is
+for (i in 1:nrow(dat))
+  if(dat[i,'receiver_quote']==0)
+    dat[i,'receiver_policy']=0
+```
+
+
+```{r include=FALSE}
+promo_sent<- dat_tab[, .(total_promo_count = length(receiver_account)), by = bucket]
+promo_sent
+```
+
+```{r include=FALSE}
+
+open_account<- dat_tab[(receiver_account== 1),length(receiver_account), by = bucket]
+colnames(open_account)<- c("bucket", "accounts_open_cnt")
+open_account
+
+
+```
+
+
+```{r include=FALSE}
+quote_rec<- dat_tab[(receiver_quote== 1),length(receiver_quote), by = bucket]
+colnames(quote_rec)<- c("bucket", "quotes_rec")
+quote_rec
+
+```
+
+```{r include=FALSE}
+policy_purchase<- dat_tab[(receiver_policy== 1),length(receiver_policy), by = bucket]
+colnames(policy_purchase)<- c("bucket", "purchased_policy")
+policy_purchase
+```
+
+```{r include=FALSE}
+A=B=C=D=new=NULL
+new=merge(unique_Id_count,Table_Unique ,by="bucket")
+A=merge(new,promo_sent)
+B=merge(A,open_account)
+C=merge(B,quote_rec)
+D=merge(C,policy_purchase)
+colnames(D)=c("bucket","dist_bucketed","bucketed_sent", "no_promos","acc_open", "quote_recd", "purch_policy" )
+```
+
+
+The tables show a general overview of the entire journey of new customer acquisition. It starts with the current customer base who were bucketed in the new experiment. Further, it shows how many unique customers were attracted to the new experiment and actually generated references. The table also shows the total number of references generated, account opened, quote received, and policy purchased under each experiment.
+Through eyeballing the data, it was observed that customers in bucket "0hr" contributed the most to customer acquisition. To further support this assumption, a conversion table was generated. 
+
+```{r echo=FALSE}
+D
+```
+
+The conversion table below depicts the conversion rate during each step of the customer acquisition process. Overall the conversion rate of experiment "0hr" seems higher.
+
+**The fairest way to compare the success of our promotion was to find the most influencing promotional offer to our current customers which helps generate maximum referral activity. To test this, a proportion of unique customers bucketed in the experiment and unique customers actually referred was considered as the primary metric of analysis.**
+
+It was observed that "0hr" has the highest proportion of unique customers who referred to other people. Hypothesis built around this observation was that customers liked to be notified immediately with an incentive of $50 compared to being notified later or having a low incentive. To test the Hypothesis, a T-Test for more than two proportions was performed to statistically prove that there is a significant difference between all the four groups.
+
+
+```{r echo=FALSE}
+conversion<- data.table(D$bucket,(D$bucketed_sent/D$dist_bucketed),(D$acc_open/D$no_promos), (D$quote_recd/D$acc_open),(D$purch_policy/D$quote_recd))
+colnames(conversion)= c("bucket", "un_bkt_sender", "acc_ref", "quote_acc", "policy_quote")
+conversion
+```
+###T-Test for two or more proportions
+
+A pairwise T-Test for proportions was performed and the results were as follows:
+```{r}
+pairwise.prop.test(D$bucketed_sent,D$dist_bucketed, p.adjust.method = "bonferroni")
+```
+While conducting the test, the hypothesis was as follows:
+
+
+**- H0: Difference in proportions is same**
+
+**- H1: Difference in proportions is not same**
+
+
+**From the results, it was observed that the P-Value of all the pairs were greater than 0.05 thus null hypothesis of equal proportion cannot be rejected. *Bonferroni* correction was used to adjust the P values. It was used to reduce the Type 1 error which occurs while testing multiple pairs. When tested each pair seperatly, chances were that the P value would be less than 0.05 as the pair tested were not exposed to the other variations which were a part of the same experiment. Hence, to avoid such errors, using correction methods was the optimal choice.**
+
+Since there was no statistically significant difference in the  proportions of unique customers sending references, it would be fair to say that all promotional offers had the same effect in terms of being attracted/motivated towards the promotion with either of the four variations. It could also be said that the chance of a single variant performing better (0hr in this case) was random.
+
+**However, considering the cost associated with each experiment, a rational decision would be to choose experiment "OFF" (Controlled) which costs $25 per new user and per customer assuming the account holder would purchase the policy.**
+
+Also, in the future, if there were two or more clear winners that is they were statistically different and had high conversion in any of the metrics, a logical way to chose one would be to calculate the cost of acquisition per customer. This would deal the tradeoff between more referral and more cost associated.
+
+
+###Sample Size Test
+
+**The table below indicates the required sample size for each pair tested. The current sample size was fairly lower than the required sample size.**
+Sample size test for two proportions was conducted to detect the required sample size of each pair of the T-Test. This provided a fair way to gauge if more sample data was required to support the findings of the T-Test. **The result clearly indicated insufficient data to validate our findings. Root should not roll out any of these three experimental variants and continue with the current promotional(OFF) activity until sufficient data is collected for significant findings.**
+
+One recommendation would be to keep running the test to collect more data until the required sample size was collected. Being dynamic in nature sample size keeps changing as new data is collected. Hence, monitoring sample size requirements at regular intervals is recommended.
+
+
+```{r include=FALSE}
+
+off_0hr<- power.prop.test(n = NULL,as.numeric(conversion[4,2]),as.numeric(conversion[1,2]),sig.level= 0.05, power=.90)
+off_168hr<- power.prop.test(n = NULL,as.numeric(conversion[4,2]),as.numeric(conversion[2,2]),sig.level= 0.05, power=.90)
+off_48hr<- power.prop.test(n = NULL,as.numeric(conversion[4,2]),as.numeric(conversion[3,2]),sig.level= 0.05, power=.90)
+ohr_168hr<- power.prop.test(n = NULL,as.numeric(conversion[1,2]),as.numeric(conversion[2,2]),sig.level= 0.05, power=.90)
+ohr_48hr<- power.prop.test(n = NULL,as.numeric(conversion[1,2]),as.numeric(conversion[3,2]),sig.level= 0.05, power=.90)
+d168_48hr<- power.prop.test(n = NULL,as.numeric(conversion[2,2]),as.numeric(conversion[3,2]),sig.level= 0.05, power=.90)
+
+sample_size_test<- t(data.table((off_0hr$n),(off_168hr$n),(off_48hr$n),(ohr_168hr$n),(ohr_48hr$n),(d168_48hr$n)))
+rownames(sample_size_test)<- c("off_0hr","off_168hr","off_48hr","ohr_168hr","ohr_48hr","d168_48hr")
+colnames(sample_size_test)<- "required_sample_size"
+```
+```{r}
+sample_size_test
+```
+
+
+
+
+###Alternate & Future testing
+Once the T-test and sample size results are out, alternative and post ad hoc tests can be performed to provide more stable and concrete results considering the scope of the project. Some post ad hoc tests which can can be performed are:
+
+1. Duration calculator - Given a conversion rate as a target, this statistical test calculates how long the test should be running.
+
+2. Chi-Square Test - A chi-square test can be performed for a similar situation when estimating whether two random variables are independent/not related. In this case,  likelihood can be tested of more referral activity from experiment A than B.
+
+3. Multi-Metric T-Test (Proportion)- Currently, T-Test was performed only on the response of customer's to the promotion, but to prove further findings similar T-Tests on all the metrics like accounts opened, quotes and policy can be performed.
+
+4. Logistic Regression - Once the required sample size is obtained, and there is a significant difference between the experiments, a regression can be performed to find out which factors affect the business metric.
+
+
+###Biases in test
+Treating biases is paramount while conducting such tests as they can change the outcomes or influence the results significantly. Considering the test was randomly sampled, there were some biases which could affect the results.
+
+1.	Referral Day/Time - It is proven that response to notifications like email, message, and mobile push notifications is affected bythe day and time it was sent.
+Although a control in the randomness of choosing the customers was observed, the day and time when the customer receives the promotion is critical. 
+
+2. Demographic data - The data lacked demographic information such as Gender, Age, occupation, etc. Being an insurance company, these are the most vital assets in terms of data. Considering, it was a random sample, it is best to be sure if the random sampling was applicable to these parameters as well. For example, if an older portion of the population received an experiment and the other experiment was sent to a younger crowd, there are multiple factors of biases in the test.
+
+3. Profit by each customer - Since we do not have the data for the amount of policy the customer purchased or the contribution margin created by these individual customers, it is biased to compare the number of customers acquired by each experiment.
+
+4. Geographic Data - The data did not mention the address of the customers that received the experiment. Geographical data can skew the results in a robust way. People living in cities would incline more towards insurance than people living in towns and suburbs.
+
+
+##Conclusion
+**To conclude the results of the test, Root should collect more data on the experimental(0hr, 48hr, 168hr) version of the test at the same time keep running the controlled (OFF) version until concrete results are proven.**
